@@ -44,6 +44,9 @@ public class Room {
             guestId = null;
             guestName = null;
         }
+        if (!this.isFull()) {
+            this.gameStarted = false;
+        }
     }
 
     public String getOpponentId(String playerId) {
@@ -66,6 +69,6 @@ public class Room {
 
     public void resetGame() {
         this.gameState = new GameState(roomCode);
-        this.gameStarted = false;
+        this.gameStarted = this.isFull();
     }
 }
