@@ -22,12 +22,16 @@ const CELL_SIZE = 40;
 const PADDING = 30;
 const canvasSize = CELL_SIZE * (BOARD_SIZE - 1) + PADDING * 2;
 
-const boardData = computed(() =>
-  store.status === 'replaying' ? store.replayBoard : store.board
-);
-const movesList = computed(() =>
-  store.status === 'replaying' ? store.replayMoves.slice(0, store.replayIndex) : store.moves
-);
+const boardData = computed(() => {
+  if (store.status === 'replaying') return store.replayBoard;
+  if (store.isOnlineMode && store.inRoom) return store.roomBoard;
+  return store.board;
+});
+const movesList = computed(() => {
+  if (store.status === 'replaying') return store.replayMoves.slice(0, store.replayIndex);
+  if (store.isOnlineMode && store.inRoom) return store.roomMoves;
+  return store.moves;
+});
 
 function drawBoard(ctx: CanvasRenderingContext2D) {
   ctx.fillStyle = '#1a3a2a';
@@ -114,7 +118,6 @@ function render() {
 
 function handleClick(e: MouseEvent) {
   if (store.status !== 'playing') return;
-  if (store.aiConfig.enabled && store.currentPlayer === store.aiConfig.playerColor) return;
 
   const canvas = canvasRef.value;
   if (!canvas) return;
@@ -128,12 +131,20 @@ function handleClick(e: MouseEvent) {
 
   if (row < 0 || row >= BOARD_SIZE || col < 0 || col >= BOARD_SIZE) return;
 
-  const placed = store.placeStone(row, col);
-  if (placed && store.aiConfig.enabled && !store.isGameOver) {
-    setTimeout(() => store.aiMove(), 200);
+  if (store.isOnlineMode && store.inRoom) {
+    if (!store.isMyTurn) return;
+    const currentBoard = boardData.value;
+    if (currentBoard[row][col] !== 0) return;
+    store.makeOnlineMove(row, col);
+  } else {
+    if (store.aiConfig.enabled && store.currentPlayer === store.aiConfig.playerColor) return;
+    const placed = store.placeStone(row, col);
+    if (placed && store.aiConfig.enabled && !store.isGameOver) {
+      setTimeout(() => store.aiMove(), 200);
+    }
   }
 }
 
 onMounted(() => render());
-watch([boardData, () => store.replayIndex, () => store.status], () => render());
+watch([boardData, () => store.replayIndex, () => store.status, () => store.roomState], () => render(), { deep: true });
 </script>

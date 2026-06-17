@@ -13,6 +13,9 @@
 
       <!-- Sidebar -->
       <div class="w-full lg:w-80 space-y-4">
+        <!-- Room Panel -->
+        <RoomPanel />
+
         <!-- Game Status -->
         <div class="bg-gray-900 rounded-xl p-4 border border-gray-700">
           <h3 class="text-lg font-bold text-green-400 mb-3">游戏状态</h3>
@@ -26,23 +29,23 @@
             <div class="flex justify-between">
               <span class="text-gray-400">当前回合</span>
               <span class="flex items-center gap-1">
-                <span class="inline-block w-3 h-3 rounded-full" :class="store.currentPlayer === 1 ? 'bg-gray-800 border border-gray-600' : 'bg-white'"></span>
-                {{ store.currentPlayer === 1 ? '黑棋' : '白棋' }}
+                <span class="inline-block w-3 h-3 rounded-full" :class="displayCurrentPlayer === 1 ? 'bg-gray-800 border border-gray-600' : 'bg-white'"></span>
+                {{ displayCurrentPlayer === 1 ? '黑棋' : '白棋' }}
               </span>
             </div>
             <div class="flex justify-between">
               <span class="text-gray-400">手数</span>
-              <span class="text-white">{{ store.currentMoveCount }}</span>
+              <span class="text-white">{{ displayMoveCount }}</span>
             </div>
-            <div v-if="store.winner !== null" class="flex justify-between">
+            <div v-if="displayWinner !== null && displayWinner !== undefined" class="flex justify-between">
               <span class="text-gray-400">结果</span>
-              <span class="font-bold" :class="store.winner === 1 ? 'text-gray-300' : store.winner === 2 ? 'text-white' : 'text-yellow-400'">
-                {{ store.winner === 1 ? '黑棋胜' : store.winner === 2 ? '白棋胜' : '平局' }}
+              <span class="font-bold" :class="displayWinner === 1 ? 'text-gray-300' : displayWinner === 2 ? 'text-white' : 'text-yellow-400'">
+                {{ displayWinner === 1 ? '黑棋胜' : displayWinner === 2 ? '白棋胜' : '平局' }}
               </span>
             </div>
           </div>
 
-          <div class="mt-4 flex gap-2">
+          <div v-if="!store.isOnlineMode" class="mt-4 flex gap-2">
             <button
               @click="store.startGame()"
               class="flex-1 py-2 bg-green-600 hover:bg-green-500 text-white rounded-lg transition-colors text-sm font-medium"
@@ -52,8 +55,8 @@
           </div>
         </div>
 
-        <!-- AI Settings -->
-        <div class="bg-gray-900 rounded-xl p-4 border border-gray-700">
+        <!-- AI Settings (only in solo mode) -->
+        <div v-if="!store.isOnlineMode" class="bg-gray-900 rounded-xl p-4 border border-gray-700">
           <h3 class="text-lg font-bold text-green-400 mb-3">AI 设置</h3>
           <div class="space-y-3">
             <div class="flex items-center justify-between">
@@ -108,8 +111,8 @@
           </div>
         </div>
 
-        <!-- Replay Panel -->
-        <ReplayPanel />
+        <!-- Replay Panel (only in solo mode) -->
+        <ReplayPanel v-if="!store.isOnlineMode" />
       </div>
     </div>
   </div>
@@ -120,10 +123,14 @@ import { computed } from 'vue';
 import { useGameStore } from './store/game';
 import GameBoard from './components/GameBoard.vue';
 import ReplayPanel from './components/ReplayPanel.vue';
+import RoomPanel from './components/RoomPanel.vue';
 
 const store = useGameStore();
 
 const statusText = computed(() => {
+  if (store.isOnlineMode) {
+    if (store.inRoom && !store.roomState?.gameStarted) return '等待对手';
+  }
   switch (store.status) {
     case 'idle': return '等待开始';
     case 'playing': return '对弈中';
@@ -131,5 +138,26 @@ const statusText = computed(() => {
     case 'replaying': return '回放中';
     default: return '';
   }
+});
+
+const displayCurrentPlayer = computed(() => {
+  if (store.isOnlineMode && store.inRoom) {
+    return store.roomCurrentPlayer;
+  }
+  return store.currentPlayer;
+});
+
+const displayWinner = computed(() => {
+  if (store.isOnlineMode && store.inRoom) {
+    return store.roomWinner;
+  }
+  return store.winner;
+});
+
+const displayMoveCount = computed(() => {
+  if (store.isOnlineMode && store.inRoom) {
+    return store.roomMoves.length;
+  }
+  return store.currentMoveCount;
 });
 </script>

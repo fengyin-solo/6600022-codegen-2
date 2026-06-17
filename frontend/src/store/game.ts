@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia';
-import { ref, computed } from 'vue';
-import type { BoardState, Move, GameRecord, AIConfig, GameStatus } from '../types';
+import { ref, computed, watch } from 'vue';
+import type { BoardState, Move, GameRecord, AIConfig, GameStatus, GameMode, RoomState, WsMessage, ChatMessage } from '../types';
 
 const BOARD_SIZE = 15;
 const EMPTY = 0;
@@ -208,8 +208,28 @@ export const useGameStore = defineStore('game', () => {
   const isReplayPlaying = ref(false);
   const replaySpeed = ref(1000);
 
+  // Online mode
+  const gameMode = ref<GameMode>('solo');
+  const playerId = ref<string>('');
+  const playerName = ref<string>('');
+  const roomState = ref<RoomState | null>(null);
+  const wsConnected = ref(false);
+  const wsError = ref<string>('');
+  const chatMessages = ref<ChatMessage[]>([]);
+  let ws: WebSocket | null = null;
+
   const currentMoveCount = computed(() => moves.value.length);
   const isGameOver = computed(() => status.value === 'finished');
+  const inRoom = computed(() => roomState.value !== null);
+  const isOnlineMode = computed(() => gameMode.value === 'online');
+  const isMyTurn = computed(() => {
+    if (!roomState.value) return true;
+    return roomState.value.currentPlayer === roomState.value.playerColor;
+  });
+  const roomBoard = computed(() => roomState.value?.board || createEmptyBoard());
+  const roomMoves = computed(() => roomState.value?.moves || []);
+  const roomWinner = computed(() => roomState.value?.winner ?? null);
+  const roomCurrentPlayer = computed(() => roomState.value?.currentPlayer || BLACK);
 
   function startGame() {
     board.value = createEmptyBoard();
@@ -355,6 +375,156 @@ export const useGameStore = defineStore('game', () => {
     return checkWinAt(board.value, row, col, board.value[row][col]);
   }
 
+  // --- Online Mode Methods ---
+
+  function setGameMode(mode: GameMode) {
+    gameMode.value = mode;
+    if (mode === 'solo') {
+      disconnectWs();
+      roomState.value = null;
+      chatMessages.value = [];
+    }
+  }
+
+  function connectWs() {
+    if (ws && ws.readyState === WebSocket.OPEN) return;
+
+    const wsUrl = import.meta.env.VITE_WS_URL || 'ws://localhost:8002/ws/game';
+    ws = new WebSocket(wsUrl);
+
+    ws.onopen = () => {
+      wsConnected.value = true;
+      wsError.value = '';
+    };
+
+    ws.onmessage = (event) => {
+      try {
+        const data: WsMessage = JSON.parse(event.data);
+        handleWsMessage(data);
+      } catch (e) {
+        console.error('Failed to parse WebSocket message:', e);
+      }
+    };
+
+    ws.onerror = () => {
+      wsConnected.value = false;
+      wsError.value = '连接失败';
+    };
+
+    ws.onclose = () => {
+      wsConnected.value = false;
+    };
+  }
+
+  function disconnectWs() {
+    if (ws) {
+      ws.close();
+      ws = null;
+    }
+    wsConnected.value = false;
+  }
+
+  function handleWsMessage(data: WsMessage) {
+    switch (data.type) {
+      case 'connected':
+        if (data.playerId) {
+          playerId.value = data.playerId;
+        }
+        break;
+      case 'room_state':
+        if (data.board && data.moves !== undefined) {
+          roomState.value = {
+            roomCode: data.roomCode!,
+            hostName: data.hostName!,
+            guestName: data.guestName!,
+            gameStarted: data.gameStarted!,
+            playerColor: data.playerColor!,
+            isHost: data.isHost!,
+            hostColor: (data as any).hostColor ?? 1,
+            guestColor: (data as any).guestColor ?? 2,
+            board: data.board,
+            currentPlayer: data.currentPlayer!,
+            moves: data.moves,
+            winner: data.winner!,
+          };
+          status.value = data.winner !== null && data.winner !== undefined
+            ? 'finished'
+            : data.gameStarted ? 'playing' : 'idle';
+        }
+        break;
+      case 'opponent_left':
+        wsError.value = '对手已离开房间';
+        break;
+      case 'error':
+        wsError.value = data.message || '发生错误';
+        setTimeout(() => { wsError.value = ''; }, 3000);
+        break;
+      case 'chat':
+        if (data.playerName && data.message && data.timestamp) {
+          chatMessages.value.push({
+            playerName: data.playerName,
+            message: data.message,
+            timestamp: data.timestamp,
+          });
+        }
+        break;
+    }
+  }
+
+  function sendWsMessage(message: Record<string, unknown>) {
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      wsError.value = '未连接到服务器';
+      return false;
+    }
+    ws.send(JSON.stringify(message));
+    return true;
+  }
+
+  function createRoom(name: string) {
+    playerName.value = name || '玩家';
+    if (!wsConnected.value) {
+      connectWs();
+      setTimeout(() => {
+        sendWsMessage({ type: 'create_room', playerName: name });
+      }, 500);
+    } else {
+      sendWsMessage({ type: 'create_room', playerName: name });
+    }
+  }
+
+  function joinRoom(roomCode: string, name: string) {
+    playerName.value = name || '玩家';
+    if (!wsConnected.value) {
+      connectWs();
+      setTimeout(() => {
+        sendWsMessage({ type: 'join_room', roomCode: roomCode.toUpperCase(), playerName: name });
+      }, 500);
+    } else {
+      sendWsMessage({ type: 'join_room', roomCode: roomCode.toUpperCase(), playerName: name });
+    }
+  }
+
+  function leaveRoom() {
+    sendWsMessage({ type: 'leave_room' });
+    roomState.value = null;
+    chatMessages.value = [];
+    status.value = 'idle';
+  }
+
+  function makeOnlineMove(row: number, col: number) {
+    if (!roomState.value || roomState.value.winner !== null) return false;
+    if (!isMyTurn.value) return false;
+    return sendWsMessage({ type: 'make_move', row, col });
+  }
+
+  function restartOnlineGame() {
+    sendWsMessage({ type: 'restart_game' });
+  }
+
+  function sendChat(message: string) {
+    sendWsMessage({ type: 'chat', message });
+  }
+
   return {
     board, currentPlayer, moves, status, winner, gameRecords, aiConfig, isAiThinking,
     replayMoves, replayIndex, replayBoard, isReplayPlaying, replaySpeed,
@@ -362,5 +532,9 @@ export const useGameStore = defineStore('game', () => {
     startGame, placeStone, aiMove, saveRecord,
     startReplay, replayStepForward, replayStepBack, replayGoToStart, replayGoToEnd,
     toggleReplayPlay, setReplaySpeed, stopReplay, checkWin,
+    gameMode, playerId, playerName, roomState, wsConnected, wsError, chatMessages,
+    inRoom, isOnlineMode, isMyTurn, roomBoard, roomMoves, roomWinner, roomCurrentPlayer,
+    setGameMode, connectWs, disconnectWs,
+    createRoom, joinRoom, leaveRoom, makeOnlineMove, restartOnlineGame, sendChat,
   };
 });
